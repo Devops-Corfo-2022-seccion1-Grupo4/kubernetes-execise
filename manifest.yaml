@@ -1,0 +1,169 @@
+# Generar manifiesto para desplegar la aplicación desarrollada en módulos anteriores.
+# Debe considerar:
+# 1) Ingress                                                        check
+# 2) Réplicas 2                                                     check
+# 3) Autoescalado 2 a 4 mediante el uso de cpu al 50 %              check
+# 4) Exponer el servicio ( cluster ip)                              check
+# 5) utilizar rolling update como estrategia                        check
+# 6) Setear variables de ambiente (version-java)                    check
+# 7) Setear variables de ambiente con configmap (Grupo, Modulo)     check
+# 8) Setear secreto como un archivo (Integrantes Grupo)             check
+# 10) Setear liveness y readiness.                                  check
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: petclinic
+  name: petclinic
+  namespace: default
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 2
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: petclinic
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: petclinic
+    spec:
+      containers:
+      - image: lgcerda/petclinic:latest
+        name: petclinic      
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080        
+        env:
+        - name: VERSION_JAVA_CUSTOM
+          value: "openjdk 11.0.17"
+        - name: GRUPO
+          valueFrom:
+            configMapKeyRef:
+              name: petclinic
+              key: grupo          
+        - name: MODULO
+          valueFrom:
+            configMapKeyRef:
+              name: petclinic
+              key: modulo                  
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /
+            port: 8080
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1        
+        readinessProbe:
+          httpGet:
+            scheme: HTTP
+            path: /
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5       
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+          - name: secret-integrantes
+            mountPath: "/tmp/secret"
+      volumes:
+        - name: secret-integrantes
+          secret:
+            secretName: integrantes           
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+        
+
+          
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: petclinic
+  name: petclinic
+  namespace: default  
+spec:
+  ports:
+  - name: 8080-tcp
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: petclinic
+    deploymentconfig: petclinic
+  type: ClusterIP
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: petclinic
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: petclinic
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: petclinic
+  namespace: default  
+data:
+  grupo: grupo4
+  modulo: modulo8
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: integrantes
+data:
+  integrantes: |
+    Q3Jpc3RvYmFsIFZhbGVuY2lhCkJyZW5kYSBDb250YWRvciAKTHVpcyBDZXJkYQpIZXJuYW4gVWdhcnRl
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: petclinic
+  namespace: default
+  labels:
+    name: petclinic
+spec:
+  rules:
+  - host: petclinic.cl
+    http:
+      paths:
+      - pathType: Prefix
+        path: "/"
+        backend:
+          service:
+            name: petclinic
+            port: 
+              number: 8080
